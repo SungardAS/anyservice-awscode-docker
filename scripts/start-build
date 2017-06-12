@@ -1,0 +1,115 @@
+#!/bin/ash
+set -e
+
+OPTS=$@
+
+git diff HEAD~ --name-only
+
+git diff HEAD~ --name-only > .awscode_diff_head
+
+if [ -z "$CODEBUILD_S3_BUCKET" ]; then
+  echo "CODEBUILD_S3_BUCKET must be set"
+fi
+
+if [ -z "$CODEBUILD_S3_ARCHIVE_KEY" ]; then
+  echo "CODEBUILD_S3_ARCHIVE_KEY must be set"
+fi
+
+if [ -n "$BITBUCKET_COMMIT" ]; then
+  ci_env_prefix="BITBUCKET_"
+  map_file="$BITBUCKET_REPO_OWNER-$BITBUCKET_REPO_SLUG-$BITBUCKET_COMMIT.json";
+elif [ -n "$GITLAB_CI" ]; then
+  # ci_env_prefix="CI_"
+  map_file="$CI_PROJECT_NAMESPACE-$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHA.json";
+fi
+
+WAIT_FOR_CODEBUILD=${WAIT_FOR_CODEBUILD:-true}
+
+zip -r code.zip ./
+
+ci_env() {
+  env \
+  | grep $ci_env_prefix \
+  | awk -F= '{print "name="$1 ",value="$2}' \
+  | tr "\n" " "
+};
+
+ci_json() {
+  env \
+    | grep $ci_env_prefix \
+    | awk -F= '{"jq -n -c '\''.name=\"" $1 "\" | .value=\"" $2 "\"'\''" | getline ts; print ts}' \
+    | tr "\n" " ";
+};
+
+s3_put_archive() {
+  aws s3api put-object \
+  --body ./code.zip \
+  --bucket $CODEBUILD_S3_BUCKET \
+  --key $CODEBUILD_S3_ARCHIVE_KEY \
+  --output text --query 'VersionId'
+};
+
+version_id=$(s3_put_archive);
+echo "S3 Object Version: $version_id";
+
+
+start_build() {
+
+  echo $(ci_json) | jq -s -c '{environmentVariablesOverride:.}' > /tmp/_cli_input.json;
+  if [ -n "$CODEBUILD_START_JSON_FILE" ]; then
+    cli_input_json=`jq -s -c '[.[] | to_entries] | flatten | reduce (.[]) as $dot ({}; (if ($dot.value|type == "array") then .[$dot.key] += $dot.value else .[$dot.key] = $dot.value end))' /tmp/_cli_input.json $CODEBUILD_START_JSON_FILE`;
+  else
+    cli_input_json="{}"
+  fi
+
+  local project_name_arg="--project-name $CODEBUILD_PROJECT_NAME";
+  if [ -z $CODEBUILD_PROJECT_NAME ]; then
+    project_name_arg="";
+  fi
+
+  aws codebuild start-build \
+  $project_name_arg \
+  --source-version $version_id \
+  --cli-input-json $cli_input_json \
+  --output text \
+  --query 'build.id' \
+  $@
+};
+
+start_build_id=$(start_build);
+echo $start_build_id;
+
+
+if [ $WAIT_FOR_CODEBUILD == "true" ]; then
+  until [ $(aws codebuild batch-get-builds --ids $start_build_id --output text --query 'builds[0].buildComplete') == "True" ];
+  do
+    echo "Waiting for $start_build_id to complete";
+    sleep 5;
+  done
+
+  codebuild_job=$(aws codebuild batch-get-builds --ids $start_build_id --query "builds[0]");
+  echo $codebuild_job;
+  codebuild_status=`echo $codebuild_job | jq -c -r '.buildStatus'`;
+
+  if [ $codebuild_status == "SUCCEEDED" ];
+  then
+    echo "$start_build_id completed successfully!"
+    echo $codebuild_job > _codebuild_job;
+    s3_put_gitref() {
+      aws s3api put-object \
+      --body _codebuild_job \
+      --bucket $CODEBUILD_S3_BUCKET \
+      --key "$CODEBUILD_S3_MAP_PATH/$map_file"
+    };
+
+    if [ -n "$CODEBUILD_S3_MAP_PATH" ]; then
+      echo "Writing map file"
+      s3_put_gitref
+    fi
+    true
+  else
+    echo "$start_build_id failed!"
+    echo $codebuild_status;
+    exit 1;
+  fi
+fi
