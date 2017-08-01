@@ -3,8 +3,8 @@ set -e
 
 OPTS=$@
 
+# Utility to preform work or see only changed files
 git diff HEAD~ --name-only
-
 git diff HEAD~ --name-only > .awscode_diff_head
 
 if [ -z "$CODEBUILD_S3_BUCKET" ]; then
@@ -18,9 +18,13 @@ fi
 if [ -n "$BITBUCKET_COMMIT" ]; then
   ci_env_prefix="BITBUCKET_"
   map_file="$BITBUCKET_REPO_OWNER-$BITBUCKET_REPO_SLUG-$BITBUCKET_COMMIT.json";
+
+  echo "Detected BitBucket environment: $ci_env_prefix"
 elif [ -n "$GITLAB_CI" ]; then
-  # ci_env_prefix="CI_"
+  ci_env_prefix="CI_"
   map_file="$CI_PROJECT_NAMESPACE-$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHA.json";
+
+  echo "Detected GitLab environment: $ci_env_prefix"
 fi
 
 WAIT_FOR_CODEBUILD=${WAIT_FOR_CODEBUILD:-true}
@@ -42,6 +46,8 @@ ci_json() {
 };
 
 s3_put_archive() {
+  echo "START PUT: $CODEBUILD_S3_BUCKET/$CODEBUILD_S3_ARCHIVE_KEY"
+
   aws s3api put-object \
   --body ./code.zip \
   --bucket $CODEBUILD_S3_BUCKET \
