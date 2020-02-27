@@ -1,4 +1,4 @@
-#!/bin/ash
+#!/bin/bash
 set -e
 
 if [ -z "$CODEBUILD_S3_BUCKET" ]; then
@@ -6,13 +6,11 @@ if [ -z "$CODEBUILD_S3_BUCKET" ]; then
   exit 1;
 fi
 
-aws configure set s3.signature_version s3v4
+# aws configure set s3.signature_version s3v4
 
 if [ -n "$BITBUCKET_COMMIT" ]; then
-  ci_env_prefix="BITBUCKET_"
   map_file="$BITBUCKET_REPO_OWNER-$BITBUCKET_REPO_SLUG-$BITBUCKET_COMMIT.json";
 elif [ -n "$GITLAB_CI" ]; then
-  # ci_env_prefix="CI_"
   map_file="$CI_PROJECT_NAMESPACE-$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHA.json";
 fi
 
@@ -23,18 +21,26 @@ aws s3api get-object \
   --key "$CODEBUILD_S3_MAP_PATH/$map_file" \
   _map_file;
 
-artifacts_s3_arn=`jq -r -c '.artifacts.location' _map_file`;
+artifacts_s3_arn=`jq -r -c '.artifacts.location' _map_file`
 
 artifacts_s3=`echo $artifacts_s3_arn | awk -F: '{print $6}'`
-artifacts_s3_bucket=`echo $artifacts_s3 | cut -d '/' -f 1`;
-artifacts_s3_key=`echo $artifacts_s3 | cut -d '/' -f 2-`;
+artifacts_s3_bucket=`echo $artifacts_s3 | cut -d '/' -f 1`
+artifacts_s3_key=`echo $artifacts_s3 | cut -d '/' -f 2-`
 
 mkdir _artifacts;
 cd _artifacts;
 
-echo "s3://$artifacts_s3_bucket/$artifacts_s3_key";
-files=`aws s3 sync s3://$artifacts_s3_bucket/$artifacts_s3_key .`
-echo $files;
+echo "s3://$artifacts_s3_bucket/$artifacts_s3_key"
+
+aws s3 sync s3://$artifacts_s3_bucket/$artifacts_s3_key .
+
+#aws s3api get-object \
+  #--bucket $artifacts_s3_bucket \
+  #--key "$artifacts_s3_key" \
+  #singlefile;
+
+pwd
+ls -al
 
 is_zip="false"
 num_files=`ls -1 | wc -l`
