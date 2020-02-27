@@ -6,7 +6,6 @@ RUN apk add --update \
   && rm -rf /var/cache/apk/*
 
 ADD scripts/start-build /usr/local/bin
-ADD scripts/codebuild /usr/local/bin
 ADD scripts/codepipeline /usr/local/bin
 
 # backward compatibility
